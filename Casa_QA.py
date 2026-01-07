@@ -201,27 +201,33 @@ def planing(state: State) -> State:
 
     # 流式输出
     print("\n\n📝任务规划中...\n")
-    gen = llm_with_tools.stream(prompt)
-    response = None
-    for chunk in gen:
-        if response is None:
-            response = chunk
+
+    n = 0
+    while n < 3:
+        gen = llm_with_tools.stream(prompt)
+        response = None
+        for chunk in gen:
+            if response is None:
+                response = chunk
+            else:
+                response = response + chunk
+
+            if not response.tool_calls:
+                print(chunk.content, end="", flush=True)
+
+        # # 直接输出
+        # response = llm_with_tools.invoke(prompt)
+
+        # 存在工具调用
+        if response.tool_calls:
+            print(f"\n\n👉下一步：工具调用\n{response.tool_calls}")
+            return {"messages": response, "n_tools": len(response.tool_calls)}
+        elif response.invalid_tool_calls:
+            n += 1
+            print(f"\n\n⚠️工具选择出错，第{n}次重试")
         else:
-            response = response + chunk
-
-        if not response.tool_calls:
-            print(chunk.content, end="", flush=True)
-
-    # # 直接输出
-    # response = llm_with_tools.invoke(prompt)
-
-    # 根据是否有工具调用来判断任务结束
-    if response.tool_calls:
-        print(f"\n\n👉下一步：工具调用\n{response.tool_calls}")
-        return {"messages": response, "n_tools": len(response.tool_calls)}
-    else:
-        print(f"\n\n👍任务完成")
-        return {"messages": response, "response": response.content, "n_tools": 0}
+            print(f"\n\n👍任务完成")
+            return {"messages": response, "response": response.content, "n_tools": 0}
 
 
 def should_use_tool(state: State) -> str:
@@ -282,18 +288,20 @@ def break_loop(state: State) -> State:
 
 
 graph = StateGraph(State)
-graph.add_node("分析", analyse)
-graph.add_node("规划", planing)
+graph.add_node("任务分析", analyse)
+graph.add_node("任务规划", planing)
 tool_node = ToolNode(tools=tools)
 graph.add_node("工具调用", tool_node)
 graph.add_node("行动验证", verify_tool_call)
 
 
-graph.add_conditional_edges(START, reject, {"拒答": END, "回答": "分析"})
-graph.add_edge("分析", "规划")
-graph.add_conditional_edges("规划", should_use_tool, {"tools": "工具调用", END: END})
+graph.add_conditional_edges(START, reject, {"拒答": END, "回答": "任务分析"})
+graph.add_edge("任务分析", "任务规划")
+graph.add_conditional_edges(
+    "任务规划", should_use_tool, {"tools": "工具调用", END: END}
+)
 graph.add_edge("工具调用", "行动验证")
-graph.add_conditional_edges("行动验证", break_loop, {"continue": "规划", END: END})
+graph.add_conditional_edges("行动验证", break_loop, {"continue": "任务规划", END: END})
 # 编译静态图
 app = graph.compile()
 
